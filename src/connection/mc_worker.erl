@@ -2,12 +2,13 @@
 -behaviour(gen_server).
 
 -include("mongo_protocol.hrl").
+-include("mongo_types.hrl").
 
 -define(WRITE(Req), is_record(Req, insert); is_record(Req, update); is_record(Req, delete)).
 -define(READ(Req), is_record(Request, 'query'); is_record(Request, getmore)).
 -define(OP_MSG(Req), is_record(Request, 'op_msg_command'); is_record(Request, 'op_msg_write_op')).
 
--export([start_link/1, disconnect/1, hibernate/1]).
+-export([start_link/1, disconnect/1, hibernate/1, form_state/1]).
 -export([
   init/1,
   handle_call/3,
@@ -258,7 +259,8 @@ form_state(Options) ->
   AuthSource = mc_utils:get_value(auth_source, Options, <<"admin">>),
   RMode = mc_utils:get_value(r_mode, Options, master),
   WMode = mc_utils:get_value(w_mode, Options, unsafe),
-  #conn_state{database = Database, auth_source = AuthSource, read_mode = RMode, write_mode = WMode}.
+  ReadConcernLevel = mc_utils:get_value(read_concern_level, Options, undefined),
+  #conn_state{database = Database, auth_source = AuthSource, read_mode = RMode, write_mode = WMode, read_concern_level = ReadConcernLevel}.
 
 %% @private
 %% Register this process if needed

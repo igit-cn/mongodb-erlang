@@ -34,9 +34,10 @@
 -type socket() :: gen_tcp:socket() | ssl:sslsocket().
 -type write_mode() :: unsafe | safe | {safe, bson:document()}.
 -type read_mode() :: master | slave_ok.
+-type read_concern_level() :: local | available | majority | linearizable | snapshot.
 -type service() :: {Host :: inet:hostname() | inet:ip_address(), Post :: 0..65535}.
 -type options() :: [option()].
--type option() :: {timeout, timeout()} | {ssl, boolean()} | ssl | {database, database()} | {read_mode, read_mode()} | {write_mode, write_mode()}.
+-type option() :: {timeout, timeout()} | {ssl, boolean()} | ssl | {database, database()} | {read_mode, read_mode()} | {write_mode, write_mode()} | {read_concern_level, read_concern_level()}.
 -type cursor() :: pid().
 -type query() :: #query{}.
 -type op_msg_command() :: #op_msg_command{}.

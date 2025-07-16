@@ -3,6 +3,8 @@
 -ifndef(MONGO_PROTOCOL).
 -define(MONGO_PROTOCOL, true).
 
+-include("mongo_types.hrl").
+
 -define(GS2_HEADER, <<"n,,">>).
 
 -type colldb() :: collection() | {database(), collection()}.
@@ -80,7 +82,8 @@
   write_mode = unsafe :: mc_worker_api:write_mode(),
   read_mode = master :: mc_worker_api:read_mode(),
   database :: mc_worker_api:database(),
-  auth_source :: mc_worker_api:database()
+  auth_source :: mc_worker_api:database(),
+  read_concern_level :: undefined | read_concern_level()
 }).
 -type conn_state() :: #conn_state{}.
 

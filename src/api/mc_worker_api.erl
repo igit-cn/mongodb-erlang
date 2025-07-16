@@ -167,6 +167,7 @@ find_one(Connection, Coll, Selector, Args) ->
       Projector = maps:get(projector, Args, #{}),
       Skip = maps:get(skip, Args, 0),
       ReadPref = maps:get(readopts, Args, #{<<"mode">> => <<"primary">>}),
+      ReadConcern = get_read_concern(Connection, Args),
       case mc_utils:use_legacy_protocol(Connection) of
           true -> 
               SelectorWithReadPref = mongoc:append_read_preference(Selector, ReadPref),
@@ -177,8 +178,8 @@ find_one(Connection, Coll, Selector, Args) ->
                           projector = Projector,
                           skip = Skip
                          });
-          false -> 
-              CommandDoc = [
+          false ->
+              BaseCommandDoc = [
                                 {<<"find">>, Coll},
                                 {<<"$readPreference">>, ReadPref},
                                 {<<"filter">>, Selector},
@@ -187,8 +188,11 @@ find_one(Connection, Coll, Selector, Args) ->
                                 {<<"batchSize">>, 1},
                                 {<<"limit">>, 1},
                                 {<<"singleBatch">>, true} %% Close cursor after first batch
-                                        
-                           ],
+                               ],
+              CommandDoc = case ReadConcern of
+                               undefined -> BaseCommandDoc;
+                               _ -> BaseCommandDoc ++ [{<<"readConcern">>, ReadConcern}]
+                           end,
               mc_connection_man:op_msg_read_one(Connection,
                                                 #'op_msg_command'{
                                                    command_doc = CommandDoc
@@ -222,7 +226,7 @@ find(Connection, Coll, Selector) ->
 find(Connection, Coll, Selector, Args) ->
   Projector = maps:get(projector, Args, #{}),
   Skip = maps:get(skip, Args, 0),
-  BatchSize = 
+  BatchSize =
         case mc_utils:use_legacy_protocol(Connection) of
             true ->
                 maps:get(batchsize, Args, 0);
@@ -253,6 +257,7 @@ find(Connection, Query) when is_record(Query, query) ->
                          batchsize = BatchSize,
                          projector = Projector} = Query,
                 {ReadPref, NewSelector, OrderBy} = mongoc:extract_read_preference(Selector),
+                ReadConcern = get_read_concern(Connection, #{}),
                 %% We might need to do some transformations:
                 %% See: https://github.com/mongodb/specifications/blob/master/source/find_getmore_killcursors_commands.rst#mapping-op-query-behavior-to-the-find-command-limit-and-batchsize-fields
                 SingleBatch = BatchSize < 0,
@@ -274,7 +279,7 @@ find(Connection, Query) when is_record(Query, query) ->
                         _ ->
                             [{<<"sort">>, OrderBy}] 
                     end,
-                CommandDoc = [
+                BaseCommandDoc = [
                               {<<"find">>, Coll},
                               {<<"$readPreference">>, ReadPref},
                               {<<"filter">>, NewSelector},
@@ -283,6 +288,10 @@ find(Connection, Query) when is_record(Query, query) ->
                              ] ++ SortField
                                ++ BatchSizeField
                                ++ SingleBatchField,
+                CommandDoc = case ReadConcern of
+                                 undefined -> BaseCommandDoc;
+                                 _ -> BaseCommandDoc ++ [{<<"readConcern">>, ReadConcern}]
+                             end,
                 #op_msg_command{command_doc = CommandDoc} 
         end,
   case mc_connection_man:read(Connection, FixedQuery) of
@@ -301,10 +310,22 @@ count(Connection, Coll, Selector) ->
 -spec count(pid(), collection(), selector(), map()) -> integer().
 count(Connection, Coll, Selector, Args = #{limit := Limit}) when Limit > 0 ->
   ReadPref = maps:get(readopts, Args, #{<<"mode">> => <<"primary">>}),
-  count(Connection, {<<"count">>, Coll, <<"query">>, Selector, <<"limit">>, Limit, <<"$readPreference">>, ReadPref});
+  ReadConcern = get_read_concern(Connection, Args),
+  BaseCommand = {<<"count">>, Coll, <<"query">>, Selector, <<"limit">>, Limit, <<"$readPreference">>, ReadPref},
+  Command = case ReadConcern of
+                undefined -> BaseCommand;
+                _ -> bson:append(BaseCommand, {<<"readConcern">>, ReadConcern})
+            end,
+  count(Connection, Command);
 count(Connection, Coll, Selector, Args) ->
   ReadPref = maps:get(readopts, Args, #{<<"mode">> => <<"primary">>}),
-  count(Connection, {<<"count">>, Coll, <<"query">>, Selector, <<"$readPreference">>, ReadPref}).
+  ReadConcern = get_read_concern(Connection, Args),
+  BaseCommand = {<<"count">>, Coll, <<"query">>, Selector, <<"$readPreference">>, ReadPref},
+  Command = case ReadConcern of
+                undefined -> BaseCommand;
+                _ -> bson:append(BaseCommand, {<<"readConcern">>, ReadConcern})
+            end,
+  count(Connection, Command).
 
 -spec count(pid() | atom(), bson:document()) -> integer().
 count(Connection, Query) ->
@@ -368,10 +389,15 @@ command(Connection, Command) when is_tuple(Command) ->
   end;
 command(Connection, Command) when is_list(Command) ->
   case mc_utils:use_legacy_protocol(Connection) of
-      true -> 
+      true ->
           command(Connection, bson:document(Command));
       false ->
-          Msg = #op_msg_command{command_doc = fix_command_obj_list(Command)},
+          ReadConcern = get_read_concern(Connection, #{}),
+          CommandDoc = case ReadConcern of
+                           undefined -> fix_command_obj_list(Command);
+                           _ -> fix_command_obj_list(Command) ++ [{<<"readConcern">>, ReadConcern}]
+                       end,
+          Msg = #op_msg_command{command_doc = CommandDoc},
           {true, mc_connection_man:op_msg_raw_result(Connection, Msg)}
   end;
 command(Connection, Command) when is_map(Command) ->
@@ -510,6 +536,27 @@ is_command(Atom) when is_atom(Atom) ->
     is_command_bin(erlang:atom_to_binary(Atom));
 is_command(Bin) when is_binary(Bin) ->
     is_command_bin(Bin).
+
+%% @private
+%% Get read concern from connection state or args
+get_read_concern(Connection, Args) ->
+    case maps:get(read_concern_level, Args, undefined) of
+        undefined ->
+            % Get from connection state by calling the worker process
+            try
+                {ok, ConnState} = gen_server:call(Connection, #conn_state{}, 5000),
+                case ConnState#conn_state.read_concern_level of
+                    undefined -> undefined;
+                    Level -> #{<<"level">> => atom_to_binary(Level, utf8)}
+                end
+            catch
+                _:_ -> undefined
+            end;
+        Level when is_atom(Level) ->
+            #{<<"level">> => atom_to_binary(Level, utf8)};
+        Level when is_binary(Level) ->
+            #{<<"level">> => Level}
+    end.
 
 is_command_bin(<<"aggregate">>) -> true;
 is_command_bin(<<"count">>) -> true;
