@@ -3,14 +3,13 @@
 -ifndef(MONGO_PROTOCOL).
 -define(MONGO_PROTOCOL, true).
 
--include("mongo_types.hrl").
-
 -define(GS2_HEADER, <<"n,,">>).
 
 -type colldb() :: collection() | {database(), collection()}.
 -type collection() :: binary() | atom(). % without db prefix
 -type database() :: binary() | atom().
 -type command() :: insert | update | delete.
+-type read_concern_level() :: local | available | majority | linearizable | snapshot.
 
 
 %% write

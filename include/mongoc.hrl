@@ -50,7 +50,6 @@
 -define(TRANSACTION_TIMEOUT, 5000).
 
 -type readmode() :: primary | secondary | primaryPreferred | secondaryPreferred | nearest.
--type read_concern_level() :: local | available | majority | linearizable | snapshot.
 -type host() :: list().
 -type seed() :: host()
 | {rs, binary(), [host()]}
