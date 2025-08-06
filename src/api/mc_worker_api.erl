@@ -39,6 +39,21 @@
   ensure_index/3,
   prepare/2]).
 
+%% Transaction and Session API
+-export([
+  start_session/1,
+  start_session/2,
+  end_session/1,
+  start_transaction/2,
+  start_transaction/3,
+  commit_transaction/1,
+  abort_transaction/1,
+  with_transaction/3,
+  with_transaction/4,
+  in_transaction/4,
+  in_transaction/5
+]).
+
 -define(START_WORKER_TIMEOUT, 30000).
 
 %% @doc Make one connection to server, return its pid
@@ -708,4 +723,104 @@ is_command_bin(<<"validate">>) -> true;
 is_command_bin(<<"whatsmyuri">>) -> true;
 is_command_bin(<<"setFreeMonitoring">>) -> true;
 is_command_bin(<<"logApplicationMessage">>) -> true;
+is_command_bin(<<"startSession">>) -> true;
+is_command_bin(<<"endSessions">>) -> true;
+is_command_bin(<<"startTransaction">>) -> true;
+is_command_bin(<<"commitTransaction">>) -> true;
+is_command_bin(<<"abortTransaction">>) -> true;
 is_command_bin(_) -> false.
+
+%%%===================================================================
+%%% Transaction and Session API
+%%%===================================================================
+
+%% @doc Start a new session with default options
+-spec start_session(connection()) -> {ok, pid()} | {error, term()}.
+start_session(Connection) ->
+  start_session(Connection, #{}).
+
+%% @doc Start a new session with specified options
+-spec start_session(connection(), map()) -> {ok, pid()} | {error, term()}.
+start_session(Connection, Options) ->
+  mc_session:start_session(Connection, Options).
+
+%% @doc End a session
+-spec end_session(pid()) -> ok.
+end_session(SessionPid) ->
+  mc_session:end_session(SessionPid).
+
+%% @doc Start a transaction with default options
+-spec start_transaction(pid(), connection()) -> {ok, pid()} | {error, term()}.
+start_transaction(SessionPid, Connection) ->
+  start_transaction(SessionPid, Connection, #transaction_options{}).
+
+%% @doc Start a transaction with specified options
+-spec start_transaction(pid(), connection(), transaction_options()) -> {ok, pid()} | {error, term()}.
+start_transaction(SessionPid, Connection, Options) ->
+  mc_transaction:start_transaction(SessionPid, Connection, Options).
+
+%% @doc Commit a transaction
+-spec commit_transaction(pid()) -> ok | {error, term()}.
+commit_transaction(TransactionPid) ->
+  mc_transaction:commit_transaction(TransactionPid).
+
+%% @doc Abort a transaction
+-spec abort_transaction(pid()) -> ok | {error, term()}.
+abort_transaction(TransactionPid) ->
+  mc_transaction:abort_transaction(TransactionPid).
+
+%% @doc Execute a function within a transaction with automatic retry
+-spec with_transaction(pid(), connection(), fun()) -> {ok, term()} | {error, term()}.
+with_transaction(SessionPid, Connection, Fun) ->
+  with_transaction(SessionPid, Connection, Fun, #transaction_options{}).
+
+%% @doc Execute a function within a transaction with options and automatic retry
+-spec with_transaction(pid(), connection(), fun(), transaction_options()) -> {ok, term()} | {error, term()}.
+with_transaction(SessionPid, Connection, Fun, Options) ->
+  mc_transaction:with_transaction(SessionPid, Connection, Fun, Options).
+
+%% @doc Execute an operation within an existing transaction context
+-spec in_transaction(pid(), collection(), atom(), list()) -> term().
+in_transaction(TransactionPid, Collection, Operation, Args) ->
+  in_transaction(TransactionPid, Collection, Operation, Args, #{}).
+
+%% @doc Execute an operation within an existing transaction context with options
+-spec in_transaction(pid(), collection(), atom(), list(), map()) -> term().
+in_transaction(TransactionPid, Collection, Operation, Args, Options) ->
+  case mc_transaction:is_in_transaction(TransactionPid) of
+    true ->
+      % Get the worker from transaction context
+      % This would need to be implemented in mc_transaction module
+      case mc_transaction:get_worker(TransactionPid) of
+        {ok, Worker} ->
+          % Add transaction context to the operation
+          SessionOptions = mc_transaction:get_session_options(TransactionPid),
+          UpdatedOptions = maps:merge(Options, SessionOptions),
+          apply_operation_with_session(Worker, Collection, Operation, Args, UpdatedOptions);
+        Error ->
+          Error
+      end;
+    false ->
+      {error, not_in_transaction}
+  end.
+
+%% @doc Apply operation with session context
+-spec apply_operation_with_session(connection(), collection(), atom(), list(), map()) -> term().
+apply_operation_with_session(Worker, Collection, insert, [Documents], Options) ->
+  insert(Worker, Collection, Documents, Options);
+apply_operation_with_session(Worker, Collection, update, [Selector, Update], Options) ->
+  Upsert = maps:get(upsert, Options, false),
+  MultiUpdate = maps:get(multi, Options, false),
+  update(Worker, Collection, Selector, Update, Upsert, MultiUpdate);
+apply_operation_with_session(Worker, Collection, delete, [Selector], _Options) ->
+  delete(Worker, Collection, Selector);
+apply_operation_with_session(Worker, Collection, find, [Selector], Options) ->
+  Projector = maps:get(projector, Options, #{}),
+  find(Worker, Collection, Selector, Projector);
+apply_operation_with_session(Worker, Collection, find_one, [Selector], Options) ->
+  Projector = maps:get(projector, Options, #{}),
+  find_one(Worker, Collection, Selector, Projector);
+apply_operation_with_session(Worker, Collection, count, [Selector], _Options) ->
+  count(Worker, Collection, Selector);
+apply_operation_with_session(_Worker, _Collection, Operation, _Args, _Options) ->
+  {error, {unsupported_transaction_operation, Operation}}.

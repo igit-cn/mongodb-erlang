@@ -82,9 +82,38 @@
   read_mode = master :: mc_worker_api:read_mode(),
   database :: mc_worker_api:database(),
   auth_source :: mc_worker_api:database(),
-  read_concern_level :: undefined | read_concern_level()
+  read_concern_level :: undefined | read_concern_level(),
+  session_id :: undefined | binary()
 }).
 -type conn_state() :: #conn_state{}.
+
+%% Session and Transaction records
+-record(session, {
+  id :: binary(),
+  cluster_time :: undefined | bson:document(),
+  operation_time :: undefined | bson:timestamp(),
+  implicit :: boolean(),
+  server_session :: undefined | map()
+}).
+-type session() :: #session{}.
+
+-record(transaction_state, {
+  state :: undefined | starting | in_progress | committed | aborted,
+  options :: map(),
+  read_concern :: undefined | map(),
+  write_concern :: undefined | map(),
+  read_preference :: undefined | map(),
+  recovery_token :: undefined | bson:document()
+}).
+-type transaction_state() :: #transaction_state{}.
+
+-record(transaction_options, {
+  read_concern :: undefined | map(),
+  write_concern :: undefined | map(),
+  read_preference :: undefined | map(),
+  max_commit_time_ms :: undefined | integer()
+}).
+-type transaction_options() :: #transaction_options{}.
 
 -record(killcursor, {
   cursorids :: [mc_worker_api:cursorid()]

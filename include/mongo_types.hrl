@@ -42,4 +42,10 @@
 -type op_msg_command() :: #op_msg_command{}.
 -type op_msg_write_op() :: #op_msg_write_op{}.
 -type op_msg_response() :: #op_msg_response{}.
+
+%% Transaction and Session types (records defined in mongo_protocol.hrl)
+-type session_id() :: binary().
+-type transaction_id() :: integer().
+-type transaction_result(T) :: {ok, T} | {error, term()}.
+
 -endif.
