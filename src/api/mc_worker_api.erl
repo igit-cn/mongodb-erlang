@@ -54,6 +54,44 @@
   in_transaction/5
 ]).
 
+%% MongoDB 4.x+ Features
+-export([
+  aggregate/3,
+  aggregate/4,
+  watch/2,
+  watch/3,
+  watch_collection/4,
+  watch_collection/5,
+  watch_database/3,
+  watch_database/4,
+  retryable_insert/3,
+  retryable_insert/4,
+  retryable_update/4,
+  retryable_update/5,
+  retryable_delete/3,
+  retryable_delete/4,
+  % Modern MongoDB features
+  bulk_write/3,
+  bulk_write/4,
+  create_index_with_options/4,
+  drop_index/3,
+  list_indexes/2,
+  find_with_hint/4,
+  find_with_hint/5,
+  update_with_hint/5,
+  update_with_hint/6,
+  delete_with_hint/4,
+  delete_with_hint/5,
+  explain_query/3,
+  explain_query/4,
+  get_collection_stats/2,
+  get_collection_stats/3,
+  validate_collection/2,
+  validate_collection/3,
+  compact_collection/2,
+  reindex_collection/2
+]).
+
 -define(START_WORKER_TIMEOUT, 30000).
 
 %% @doc Make one connection to server, return its pid
@@ -824,3 +862,230 @@ apply_operation_with_session(Worker, Collection, count, [Selector], _Options) ->
   count(Worker, Collection, Selector);
 apply_operation_with_session(_Worker, _Collection, Operation, _Args, _Options) ->
   {error, {unsupported_transaction_operation, Operation}}.
+
+%%%===================================================================
+%%% MongoDB 4.x+ Features Implementation
+%%%===================================================================
+
+%% @doc Execute aggregation pipeline
+-spec aggregate(pid(), binary(), [map()]) -> {ok, pid()} | {error, term()}.
+aggregate(Connection, Collection, Pipeline) ->
+  mc_aggregation:aggregate(Connection, Collection, Pipeline).
+
+-spec aggregate(pid(), binary(), [map()], map()) -> {ok, pid()} | {error, term()}.
+aggregate(Connection, Collection, Pipeline, Options) ->
+  mc_aggregation:aggregate(Connection, Collection, Pipeline, Options).
+
+%% @doc Watch changes on entire deployment
+-spec watch(pid(), [map()]) -> {ok, pid()} | {error, term()}.
+watch(Connection, Pipeline) ->
+  mc_change_stream:watch(Connection, Pipeline).
+
+-spec watch(pid(), [map()], map()) -> {ok, pid()} | {error, term()}.
+watch(Connection, Pipeline, Options) ->
+  mc_change_stream:watch(Connection, Pipeline, Options).
+
+%% @doc Watch changes on specific collection
+-spec watch_collection(pid(), binary(), binary(), [map()]) -> {ok, pid()} | {error, term()}.
+watch_collection(Connection, Database, Collection, Pipeline) ->
+  mc_change_stream:watch_collection(Connection, Database, Collection, Pipeline).
+
+-spec watch_collection(pid(), binary(), binary(), [map()], map()) -> {ok, pid()} | {error, term()}.
+watch_collection(Connection, Database, Collection, Pipeline, Options) ->
+  mc_change_stream:watch_collection(Connection, Database, Collection, Pipeline, Options).
+
+%% @doc Watch changes on specific database
+-spec watch_database(pid(), binary(), [map()]) -> {ok, pid()} | {error, term()}.
+watch_database(Connection, Database, Pipeline) ->
+  mc_change_stream:watch_database(Connection, Database, Pipeline).
+
+-spec watch_database(pid(), binary(), [map()], map()) -> {ok, pid()} | {error, term()}.
+watch_database(Connection, Database, Pipeline, Options) ->
+  mc_change_stream:watch_database(Connection, Database, Pipeline, Options).
+
+%% @doc Retryable insert operation
+-spec retryable_insert(pid(), binary(), list() | map()) -> {{boolean(), map()}, list()}.
+retryable_insert(Connection, Collection, Documents) ->
+  retryable_insert(Connection, Collection, Documents, #{}).
+
+-spec retryable_insert(pid(), binary(), list() | map(), map()) -> {{boolean(), map()}, list()}.
+retryable_insert(Connection, Collection, Documents, Options) ->
+  WriteFun = fun(_Command) ->
+    insert(Connection, Collection, Documents, maps:get(write_concern, Options, #{}))
+  end,
+  Command = build_insert_command(Collection, Documents, Options),
+  case mc_retryable_writes:execute_retryable_write(Connection, WriteFun, Command, Options) of
+    {ok, Result} -> Result;
+    Error -> Error
+  end.
+
+%% @doc Retryable update operation
+-spec retryable_update(pid(), binary(), map(), map()) -> {boolean(), map()}.
+retryable_update(Connection, Collection, Selector, Update) ->
+  retryable_update(Connection, Collection, Selector, Update, #{}).
+
+-spec retryable_update(pid(), binary(), map(), map(), map()) -> {boolean(), map()}.
+retryable_update(Connection, Collection, Selector, Update, Options) ->
+  WriteFun = fun(_Command) ->
+    update(Connection, Collection, Selector, Update)
+  end,
+  Command = build_update_command(Collection, Selector, Update, Options),
+  case mc_retryable_writes:execute_retryable_write(Connection, WriteFun, Command, Options) of
+    {ok, Result} -> Result;
+    Error -> Error
+  end.
+
+%% @doc Retryable delete operation
+-spec retryable_delete(pid(), binary(), map()) -> {boolean(), map()}.
+retryable_delete(Connection, Collection, Selector) ->
+  retryable_delete(Connection, Collection, Selector, #{}).
+
+-spec retryable_delete(pid(), binary(), map(), map()) -> {boolean(), map()}.
+retryable_delete(Connection, Collection, Selector, Options) ->
+  WriteFun = fun(_Command) ->
+    delete(Connection, Collection, Selector)
+  end,
+  Command = build_delete_command(Collection, Selector, Options),
+  case mc_retryable_writes:execute_retryable_write(Connection, WriteFun, Command, Options) of
+    {ok, Result} -> Result;
+    Error -> Error
+  end.
+
+%%%===================================================================
+%%% Helper functions for retryable writes
+%%%===================================================================
+
+%% @private
+build_insert_command(Collection, Documents, Options) ->
+  BaseCommand = #{
+    <<"insert">> => Collection,
+    <<"documents">> => ensure_list(Documents)
+  },
+  add_write_concern(BaseCommand, Options).
+
+%% @private
+build_update_command(Collection, Selector, Update, Options) ->
+  BaseCommand = #{
+    <<"update">> => Collection,
+    <<"updates">> => [#{
+      <<"q">> => Selector,
+      <<"u">> => Update,
+      <<"multi">> => maps:get(multi, Options, false),
+      <<"upsert">> => maps:get(upsert, Options, false)
+    }]
+  },
+  add_write_concern(BaseCommand, Options).
+
+%% @private
+build_delete_command(Collection, Selector, Options) ->
+  BaseCommand = #{
+    <<"delete">> => Collection,
+    <<"deletes">> => [#{
+      <<"q">> => Selector,
+      <<"limit">> => maps:get(limit, Options, 1)
+    }]
+  },
+  add_write_concern(BaseCommand, Options).
+
+%% @private
+add_write_concern(Command, Options) ->
+  case maps:get(write_concern, Options, undefined) of
+    undefined -> Command;
+    WriteConcern -> maps:put(<<"writeConcern">>, WriteConcern, Command)
+  end.
+
+%% @private
+ensure_list(Item) when is_list(Item) -> Item;
+ensure_list(Item) -> [Item].
+
+%%%===================================================================
+%%% Modern MongoDB Features Implementation
+%%%===================================================================
+
+%% @doc Execute bulk write operations
+-spec bulk_write(pid(), binary(), [map()]) -> {ok, map()} | {error, term()}.
+bulk_write(Connection, Collection, Operations) ->
+  mc_modern_features:bulk_write(Connection, Collection, Operations).
+
+-spec bulk_write(pid(), binary(), [map()], map()) -> {ok, map()} | {error, term()}.
+bulk_write(Connection, Collection, Operations, Options) ->
+  mc_modern_features:bulk_write(Connection, Collection, Operations, Options).
+
+%% @doc Create index with modern options
+-spec create_index_with_options(pid(), binary(), map(), map()) -> {ok, map()} | {error, term()}.
+create_index_with_options(Connection, Collection, IndexSpec, Options) ->
+  mc_modern_features:create_index_with_options(Connection, Collection, IndexSpec, Options).
+
+%% @doc Drop index by name or specification
+-spec drop_index(pid(), binary(), binary() | map()) -> {ok, map()} | {error, term()}.
+drop_index(Connection, Collection, IndexSpec) ->
+  mc_modern_features:drop_index(Connection, Collection, IndexSpec).
+
+%% @doc List all indexes on collection
+-spec list_indexes(pid(), binary()) -> {ok, [map()]} | {error, term()}.
+list_indexes(Connection, Collection) ->
+  mc_modern_features:list_indexes(Connection, Collection).
+
+%% @doc Find with index hint
+-spec find_with_hint(pid(), binary(), map(), binary() | map()) -> {ok, pid()} | {error, term()}.
+find_with_hint(Connection, Collection, Filter, Hint) ->
+  mc_modern_features:find_with_hint(Connection, Collection, Filter, Hint).
+
+-spec find_with_hint(pid(), binary(), map(), binary() | map(), map()) -> {ok, pid()} | {error, term()}.
+find_with_hint(Connection, Collection, Filter, Hint, Options) ->
+  mc_modern_features:find_with_hint(Connection, Collection, Filter, Hint, Options).
+
+%% @doc Update with index hint
+-spec update_with_hint(pid(), binary(), map(), map(), binary() | map()) -> {ok, map()} | {error, term()}.
+update_with_hint(Connection, Collection, Filter, Update, Hint) ->
+  mc_modern_features:update_with_hint(Connection, Collection, Filter, Update, Hint).
+
+-spec update_with_hint(pid(), binary(), map(), map(), binary() | map(), map()) -> {ok, map()} | {error, term()}.
+update_with_hint(Connection, Collection, Filter, Update, Hint, Options) ->
+  mc_modern_features:update_with_hint(Connection, Collection, Filter, Update, Hint, Options).
+
+%% @doc Delete with index hint
+-spec delete_with_hint(pid(), binary(), map(), binary() | map()) -> {ok, map()} | {error, term()}.
+delete_with_hint(Connection, Collection, Filter, Hint) ->
+  mc_modern_features:delete_with_hint(Connection, Collection, Filter, Hint).
+
+-spec delete_with_hint(pid(), binary(), map(), binary() | map(), map()) -> {ok, map()} | {error, term()}.
+delete_with_hint(Connection, Collection, Filter, Hint, Options) ->
+  mc_modern_features:delete_with_hint(Connection, Collection, Filter, Hint, Options).
+
+%% @doc Explain query execution plan
+-spec explain_query(pid(), binary(), map()) -> {ok, map()} | {error, term()}.
+explain_query(Connection, Collection, Query) ->
+  mc_modern_features:explain_query(Connection, Collection, Query).
+
+-spec explain_query(pid(), binary(), map(), map()) -> {ok, map()} | {error, term()}.
+explain_query(Connection, Collection, Query, Options) ->
+  mc_modern_features:explain_query(Connection, Collection, Query, Options).
+
+%% @doc Get collection statistics
+-spec get_collection_stats(pid(), binary()) -> {ok, map()} | {error, term()}.
+get_collection_stats(Connection, Collection) ->
+  mc_modern_features:get_collection_stats(Connection, Collection).
+
+-spec get_collection_stats(pid(), binary(), map()) -> {ok, map()} | {error, term()}.
+get_collection_stats(Connection, Collection, Options) ->
+  mc_modern_features:get_collection_stats(Connection, Collection, Options).
+
+%% @doc Validate collection
+-spec validate_collection(pid(), binary()) -> {ok, map()} | {error, term()}.
+validate_collection(Connection, Collection) ->
+  mc_modern_features:validate_collection(Connection, Collection).
+
+-spec validate_collection(pid(), binary(), map()) -> {ok, map()} | {error, term()}.
+validate_collection(Connection, Collection, Options) ->
+  mc_modern_features:validate_collection(Connection, Collection, Options).
+
+%% @doc Compact collection (reclaim disk space)
+-spec compact_collection(pid(), binary()) -> {ok, map()} | {error, term()}.
+compact_collection(Connection, Collection) ->
+  mc_modern_features:compact_collection(Connection, Collection).
+
+%% @doc Reindex collection
+-spec reindex_collection(pid(), binary()) -> {ok, map()} | {error, term()}.
+reindex_collection(Connection, Collection) ->
+  mc_modern_features:reindex_collection(Connection, Collection).

@@ -1,5 +1,16 @@
 %% -*- mode: erlang -*-
-{"3.0.27", [
+{"3.1.0", [
+   {"3.0.27", [
+    % Add new MongoDB 4.x+ feature modules
+    {add_module, mc_change_stream},
+    {add_module, mc_retryable_writes},
+    {add_module, mc_aggregation},
+    {add_module, mc_modern_features},
+    % Update existing modules with new functionality
+    {load_module, mc_worker_api, brutal_purge, soft_purge, []},
+    {load_module, mongo_api, brutal_purge, soft_purge, []},
+    {load_module, mongoc, brutal_purge, soft_purge, []}
+   ]},
    {"3.0.26", [
     {load_module, mongoc, brutal_purge, soft_purge, []}
    ]},
@@ -83,6 +94,17 @@
   {<<".*">>, []}
  ],
  [
+   {"3.0.27", [
+    % Remove new MongoDB 4.x+ feature modules
+    {delete_module, mc_change_stream},
+    {delete_module, mc_retryable_writes},
+    {delete_module, mc_aggregation},
+    {delete_module, mc_modern_features},
+    % Downgrade existing modules to previous versions
+    {load_module, mc_worker_api, brutal_purge, soft_purge, []},
+    {load_module, mongo_api, brutal_purge, soft_purge, []},
+    {load_module, mongoc, brutal_purge, soft_purge, []}
+   ]},
    {"3.0.24", [
     {load_module, mongoc, brutal_purge, soft_purge, []}
    ]},

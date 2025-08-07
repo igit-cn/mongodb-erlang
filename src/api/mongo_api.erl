@@ -29,6 +29,44 @@
   ensure_index/3,
   disconnect/1]).
 
+%% MongoDB 4.x+ Features
+-export([
+  aggregate/3,
+  aggregate/4,
+  watch/2,
+  watch/3,
+  watch_collection/4,
+  watch_collection/5,
+  watch_database/3,
+  watch_database/4,
+  retryable_insert/3,
+  retryable_insert/4,
+  retryable_update/5,
+  retryable_update/6,
+  retryable_delete/3,
+  retryable_delete/4,
+  % Modern MongoDB features
+  bulk_write/3,
+  bulk_write/4,
+  create_index_with_options/4,
+  drop_index/3,
+  list_indexes/2,
+  find_with_hint/4,
+  find_with_hint/5,
+  update_with_hint/5,
+  update_with_hint/6,
+  delete_with_hint/4,
+  delete_with_hint/5,
+  explain_query/3,
+  explain_query/4,
+  get_collection_stats/2,
+  get_collection_stats/3,
+  validate_collection/2,
+  validate_collection/3,
+  compact_collection/2,
+  reindex_collection/2
+]).
+
 %% Transaction API
 -export([
   start_session/1,
@@ -413,3 +451,226 @@ get_transaction_duration(TransactionPid) ->
   catch
     _:_ -> undefined
   end.
+
+%%%===================================================================
+%%% MongoDB 4.x+ Features Implementation
+%%%===================================================================
+
+%% @doc Execute aggregation pipeline with connection pooling
+-spec aggregate(atom() | pid(), collection(), [map()]) -> transaction_result({ok, cursor()} | []).
+aggregate(Topology, Collection, Pipeline) ->
+  aggregate(Topology, Collection, Pipeline, #{}).
+
+-spec aggregate(atom() | pid(), collection(), [map()], map()) -> transaction_result({ok, cursor()} | []).
+aggregate(Topology, Collection, Pipeline, Options) ->
+  mongoc:transaction_query(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:aggregate(Worker, Collection, Pipeline, Options)
+    end, #{}).
+
+%% @doc Watch changes on entire deployment with connection pooling
+-spec watch(atom() | pid(), [map()]) -> transaction_result({ok, pid()} | {error, term()}).
+watch(Topology, Pipeline) ->
+  watch(Topology, Pipeline, #{}).
+
+-spec watch(atom() | pid(), [map()], map()) -> transaction_result({ok, pid()} | {error, term()}).
+watch(Topology, Pipeline, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:watch(Worker, Pipeline, Options)
+    end, #{}).
+
+%% @doc Watch changes on specific collection with connection pooling
+-spec watch_collection(atom() | pid(), binary(), binary(), [map()]) -> transaction_result({ok, pid()} | {error, term()}).
+watch_collection(Topology, Database, Collection, Pipeline) ->
+  watch_collection(Topology, Database, Collection, Pipeline, #{}).
+
+-spec watch_collection(atom() | pid(), binary(), binary(), [map()], map()) -> transaction_result({ok, pid()} | {error, term()}).
+watch_collection(Topology, Database, Collection, Pipeline, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:watch_collection(Worker, Database, Collection, Pipeline, Options)
+    end, #{}).
+
+%% @doc Watch changes on specific database with connection pooling
+-spec watch_database(atom() | pid(), binary(), [map()]) -> transaction_result({ok, pid()} | {error, term()}).
+watch_database(Topology, Database, Pipeline) ->
+  watch_database(Topology, Database, Pipeline, #{}).
+
+-spec watch_database(atom() | pid(), binary(), [map()], map()) -> transaction_result({ok, pid()} | {error, term()}).
+watch_database(Topology, Database, Pipeline, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:watch_database(Worker, Database, Pipeline, Options)
+    end, #{}).
+
+%% @doc Retryable insert with connection pooling
+-spec retryable_insert(atom() | pid(), collection(), list() | map() | bson:document()) ->
+  transaction_result({{boolean(), map()}, list()}).
+retryable_insert(Topology, Collection, Documents) ->
+  retryable_insert(Topology, Collection, Documents, #{}).
+
+-spec retryable_insert(atom() | pid(), collection(), list() | map() | bson:document(), map()) ->
+  transaction_result({{boolean(), map()}, list()}).
+retryable_insert(Topology, Collection, Documents, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:retryable_insert(Worker, Collection, Documents, Options)
+    end, #{}).
+
+%% @doc Retryable update with connection pooling
+-spec retryable_update(atom() | pid(), collection(), selector(), map(), map()) ->
+  transaction_result({boolean(), map()}).
+retryable_update(Topology, Collection, Selector, Update, Options) ->
+  retryable_update(Topology, Collection, Selector, Update, Options, #{}).
+
+-spec retryable_update(atom() | pid(), collection(), selector(), map(), map(), map()) ->
+  transaction_result({boolean(), map()}).
+retryable_update(Topology, Collection, Selector, Update, UpdateOptions, RetryOptions) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      CombinedOptions = maps:merge(UpdateOptions, RetryOptions),
+      mc_worker_api:retryable_update(Worker, Collection, Selector, Update, CombinedOptions)
+    end, #{}).
+
+%% @doc Retryable delete with connection pooling
+-spec retryable_delete(atom() | pid(), collection(), selector()) ->
+  transaction_result({boolean(), map()}).
+retryable_delete(Topology, Collection, Selector) ->
+  retryable_delete(Topology, Collection, Selector, #{}).
+
+-spec retryable_delete(atom() | pid(), collection(), selector(), map()) ->
+  transaction_result({boolean(), map()}).
+retryable_delete(Topology, Collection, Selector, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:retryable_delete(Worker, Collection, Selector, Options)
+    end, #{}).
+
+%%%===================================================================
+%%% Modern MongoDB Features Implementation
+%%%===================================================================
+
+%% @doc Execute bulk write operations with connection pooling
+-spec bulk_write(atom() | pid(), collection(), [map()]) -> transaction_result({ok, map()} | {error, term()}).
+bulk_write(Topology, Collection, Operations) ->
+  bulk_write(Topology, Collection, Operations, #{}).
+
+-spec bulk_write(atom() | pid(), collection(), [map()], map()) -> transaction_result({ok, map()} | {error, term()}).
+bulk_write(Topology, Collection, Operations, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:bulk_write(Worker, Collection, Operations, Options)
+    end, #{}).
+
+%% @doc Create index with modern options and connection pooling
+-spec create_index_with_options(atom() | pid(), collection(), map(), map()) -> transaction_result({ok, map()} | {error, term()}).
+create_index_with_options(Topology, Collection, IndexSpec, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:create_index_with_options(Worker, Collection, IndexSpec, Options)
+    end, #{}).
+
+%% @doc Drop index with connection pooling
+-spec drop_index(atom() | pid(), collection(), binary() | map()) -> transaction_result({ok, map()} | {error, term()}).
+drop_index(Topology, Collection, IndexSpec) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:drop_index(Worker, Collection, IndexSpec)
+    end, #{}).
+
+%% @doc List indexes with connection pooling
+-spec list_indexes(atom() | pid(), collection()) -> transaction_result({ok, [map()]} | {error, term()}).
+list_indexes(Topology, Collection) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:list_indexes(Worker, Collection)
+    end, #{}).
+
+%% @doc Find with index hint and connection pooling
+-spec find_with_hint(atom() | pid(), collection(), map(), binary() | map()) -> transaction_result({ok, pid()} | {error, term()}).
+find_with_hint(Topology, Collection, Filter, Hint) ->
+  find_with_hint(Topology, Collection, Filter, Hint, #{}).
+
+-spec find_with_hint(atom() | pid(), collection(), map(), binary() | map(), map()) -> transaction_result({ok, pid()} | {error, term()}).
+find_with_hint(Topology, Collection, Filter, Hint, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:find_with_hint(Worker, Collection, Filter, Hint, Options)
+    end, #{}).
+
+%% @doc Update with index hint and connection pooling
+-spec update_with_hint(atom() | pid(), collection(), map(), map(), binary() | map()) -> transaction_result({ok, map()} | {error, term()}).
+update_with_hint(Topology, Collection, Filter, Update, Hint) ->
+  update_with_hint(Topology, Collection, Filter, Update, Hint, #{}).
+
+-spec update_with_hint(atom() | pid(), collection(), map(), map(), binary() | map(), map()) -> transaction_result({ok, map()} | {error, term()}).
+update_with_hint(Topology, Collection, Filter, Update, Hint, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:update_with_hint(Worker, Collection, Filter, Update, Hint, Options)
+    end, #{}).
+
+%% @doc Delete with index hint and connection pooling
+-spec delete_with_hint(atom() | pid(), collection(), map(), binary() | map()) -> transaction_result({ok, map()} | {error, term()}).
+delete_with_hint(Topology, Collection, Filter, Hint) ->
+  delete_with_hint(Topology, Collection, Filter, Hint, #{}).
+
+-spec delete_with_hint(atom() | pid(), collection(), map(), binary() | map(), map()) -> transaction_result({ok, map()} | {error, term()}).
+delete_with_hint(Topology, Collection, Filter, Hint, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:delete_with_hint(Worker, Collection, Filter, Hint, Options)
+    end, #{}).
+
+%% @doc Explain query with connection pooling
+-spec explain_query(atom() | pid(), collection(), map()) -> transaction_result({ok, map()} | {error, term()}).
+explain_query(Topology, Collection, Query) ->
+  explain_query(Topology, Collection, Query, #{}).
+
+-spec explain_query(atom() | pid(), collection(), map(), map()) -> transaction_result({ok, map()} | {error, term()}).
+explain_query(Topology, Collection, Query, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:explain_query(Worker, Collection, Query, Options)
+    end, #{}).
+
+%% @doc Get collection statistics with connection pooling
+-spec get_collection_stats(atom() | pid(), collection()) -> transaction_result({ok, map()} | {error, term()}).
+get_collection_stats(Topology, Collection) ->
+  get_collection_stats(Topology, Collection, #{}).
+
+-spec get_collection_stats(atom() | pid(), collection(), map()) -> transaction_result({ok, map()} | {error, term()}).
+get_collection_stats(Topology, Collection, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:get_collection_stats(Worker, Collection, Options)
+    end, #{}).
+
+%% @doc Validate collection with connection pooling
+-spec validate_collection(atom() | pid(), collection()) -> transaction_result({ok, map()} | {error, term()}).
+validate_collection(Topology, Collection) ->
+  validate_collection(Topology, Collection, #{}).
+
+-spec validate_collection(atom() | pid(), collection(), map()) -> transaction_result({ok, map()} | {error, term()}).
+validate_collection(Topology, Collection, Options) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:validate_collection(Worker, Collection, Options)
+    end, #{}).
+
+%% @doc Compact collection with connection pooling
+-spec compact_collection(atom() | pid(), collection()) -> transaction_result({ok, map()} | {error, term()}).
+compact_collection(Topology, Collection) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:compact_collection(Worker, Collection)
+    end, #{}).
+
+%% @doc Reindex collection with connection pooling
+-spec reindex_collection(atom() | pid(), collection()) -> transaction_result({ok, map()} | {error, term()}).
+reindex_collection(Topology, Collection) ->
+  mongoc:transaction(Topology,
+    fun(#{pool := Worker}) ->
+      mc_worker_api:reindex_collection(Worker, Collection)
+    end, #{}).
